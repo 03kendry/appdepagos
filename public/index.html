@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pasarela de Pagos</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <span class="logo-text">Pasarela de Pagos</span>
+    </div>
+
+    <!-- ── Vista principal ── -->
+    <div class="card" id="main-view">
+      <div class="card-header">
+        <h1>Realizar un pago</h1>
+        <p>Elige el monto y el método de pago de tu preferencia.</p>
+      </div>
+
+      <!-- Monto -->
+      <div class="field">
+        <label for="amount">Monto</label>
+        <div class="input-wrap">
+          <span class="input-prefix">$</span>
+          <input
+            id="amount"
+            type="number"
+            class="has-prefix"
+            placeholder="0.00"
+            min="0.01"
+            step="0.01"
+          />
+        </div>
+      </div>
+
+      <!-- Concepto -->
+      <div class="field">
+        <label for="description">Concepto <span style="color:var(--text-muted);font-size:11px">(opcional)</span></label>
+        <input
+          id="description"
+          type="text"
+          placeholder="Ej: Servicio de diseño web"
+          maxlength="127"
+        />
+      </div>
+
+      <!-- Selector de método -->
+      <div class="field">
+        <label>Método de pago</label>
+        <div class="method-selector">
+          <div class="method-card active" data-method="card" id="method-card">
+            <span class="method-icon">💳</span>
+            <div class="method-name">Tarjeta</div>
+            <div class="method-sub">vía PayPal</div>
+          </div>
+          <div class="method-card" data-method="crypto" id="method-crypto">
+            <span class="method-icon">🪙</span>
+            <div class="method-name">Cripto</div>
+            <div class="method-sub">BTC, ETH, USDT…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Selector de cripto (solo visible en modo cripto) -->
+      <div class="field hidden" id="crypto-field">
+        <label for="crypto-select">Criptomoneda</label>
+        <select id="crypto-select">
+          <option value="">Cargando…</option>
+        </select>
+      </div>
+
+      <!-- Error general -->
+      <div id="form-error" class="error-msg hidden"></div>
+
+      <!-- Botón cripto / PayPal SDK -->
+      <div id="action-area">
+        <!-- PayPal renderiza sus botones aquí -->
+        <div id="paypal-buttons-container"></div>
+        <!-- Botón para cripto -->
+        <button class="btn-pay hidden" id="btn-crypto-pay">Continuar con Cripto →</button>
+      </div>
+    </div>
+
+    <!-- ── Vista ticket cripto ── -->
+    <div class="card hidden" id="crypto-view">
+      <div class="card-header">
+        <h1>Envía el pago</h1>
+        <p>Transfiere exactamente el monto indicado a la dirección de abajo.</p>
+      </div>
+
+      <div class="crypto-ticket">
+        <div class="ticket-row">
+          <span class="ticket-label">Moneda</span>
+          <span class="ticket-value" id="t-currency">—</span>
+        </div>
+        <div class="ticket-row">
+          <span class="ticket-label">Monto exacto</span>
+          <span class="ticket-value amount" id="t-amount">—</span>
+        </div>
+        <hr class="ticket-divider" />
+        <div class="ticket-row" style="flex-direction:column;gap:8px">
+          <span class="ticket-label">Dirección de depósito</span>
+          <span class="ticket-value" id="t-address" style="text-align:left">—</span>
+        </div>
+        <div class="qr-wrap">
+          <div id="qr-canvas"></div>
+        </div>
+        <div class="copy-row">
+          <button class="btn-copy" id="copy-address">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            Copiar dirección
+          </button>
+          <button class="btn-copy" id="copy-amount">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            Copiar monto
+          </button>
+        </div>
+      </div>
+
+      <!-- Estado en vivo -->
+      <div class="status-bar" id="status-bar">
+        <div class="status-dot waiting" id="status-dot"></div>
+        <span id="status-text">Esperando pago…</span>
+      </div>
+
+      <button class="btn-retry hidden" id="btn-retry">↩ Generar nuevo pago</button>
+    </div>
+
+    <!-- ── Vista de éxito ── -->
+    <div class="card hidden" id="success-view">
+      <div class="success-screen">
+        <div class="success-icon">✓</div>
+        <h2>¡Pago confirmado!</h2>
+        <p>Tu pago fue procesado correctamente.</p>
+
+        <div class="receipt" id="receipt"></div>
+
+        <button class="btn-new" id="btn-new-payment">Realizar otro pago</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- QR mínimo (sin dependencias externas) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
