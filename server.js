@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
+const { Pool } = require('pg');
 
 const app = express();
 app.use(express.json());
@@ -13,6 +14,7 @@ const {
   PAYPAL_MODE,
   NOWPAYMENTS_API_KEY,
   NOWPAYMENTS_IPN_SECRET,
+  DATABASE_URL,
   PORT = 3000,
   BASE_URL = 'http://localhost:3000',
 } = process.env;
@@ -21,6 +23,44 @@ const PAYPAL_BASE =
   PAYPAL_MODE === 'live'
     ? 'https://api-m.paypal.com'
     : 'https://api-m.sandbox.paypal.com';
+
+// ─── Base de datos ───────────────────────────────────────────────────────────
+
+const pool = DATABASE_URL
+  ? new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } })
+  : null;
+
+async function initDB() {
+  if (!pool) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pagos (
+      id          SERIAL PRIMARY KEY,
+      tipo        VARCHAR(10)  NOT NULL,
+      monto       NUMERIC(12,2),
+      moneda      VARCHAR(20),
+      estado      VARCHAR(30),
+      tx_id       VARCHAR(200),
+      concepto    VARCHAR(200),
+      creado_en   TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  console.log('✅ Tabla pagos lista');
+}
+
+async function guardarPago({ tipo, monto, moneda, estado, tx_id, concepto }) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO pagos (tipo, monto, moneda, estado, tx_id, concepto)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [tipo, monto, moneda, estado, tx_id, concepto]
+    );
+  } catch (err) {
+    console.error('Error guardando pago en DB:', err.message);
+  }
+}
+
+initDB().catch((err) => console.error('Error iniciando DB:', err.message));
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -51,7 +91,6 @@ async function getPayPalToken() {
 
 app.get('/api/config', async (req, res) => {
   try {
-    // Obtener lista de criptos disponibles de NOWPayments
     const cryptoRes = await fetch(
       'https://api.nowpayments.io/v1/currencies?fixed_rate=false',
       { headers: { 'x-api-key': NOWPAYMENTS_API_KEY } }
@@ -81,6 +120,21 @@ app.get('/api/config', async (req, res) => {
   } catch (err) {
     console.error('Error en /api/config:', err.message);
     res.status(500).json({ error: 'Error al cargar configuración' });
+  }
+});
+
+// ─── Ruta: historial de pagos ────────────────────────────────────────────────
+
+app.get('/api/pagos', async (req, res) => {
+  if (!pool) return res.json([]);
+  try {
+    const result = await pool.query(
+      'SELECT * FROM pagos ORDER BY creado_en DESC LIMIT 100'
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error obteniendo pagos:', err.message);
+    res.status(500).json({ error: 'Error al obtener pagos' });
   }
 });
 
@@ -157,6 +211,16 @@ app.post('/api/paypal/capture-order/:orderID', async (req, res) => {
     const capture = await captureRes.json();
     const captureUnit = capture.purchase_units?.[0]?.payments?.captures?.[0];
 
+    // Guardar en DB
+    await guardarPago({
+      tipo: 'paypal',
+      monto: captureUnit?.amount?.value,
+      moneda: captureUnit?.amount?.currency_code || 'USD',
+      estado: capture.status,
+      tx_id: captureUnit?.id || capture.id,
+      concepto: capture.purchase_units?.[0]?.description || 'Pago',
+    });
+
     res.json({
       transactionId: captureUnit?.id || capture.id,
       amount: captureUnit?.amount?.value,
@@ -223,12 +287,21 @@ app.post('/api/crypto/create-payment', async (req, res) => {
     if (!paymentRes.ok) {
       const err = await paymentRes.json();
       console.error('Error creando pago cripto:', err);
-      const msg =
-        err.message || 'Error al crear el pago cripto';
-      return res.status(500).json({ error: msg });
+      return res.status(500).json({ error: err.message || 'Error al crear el pago cripto' });
     }
 
     const payment = await paymentRes.json();
+
+    // Guardar pago pendiente en DB
+    await guardarPago({
+      tipo: 'crypto',
+      monto: parseFloat(amount),
+      moneda: currency,
+      estado: payment.payment_status,
+      tx_id: String(payment.payment_id),
+      concepto: description || 'Pago',
+    });
+
     res.json({
       paymentId: payment.payment_id,
       payAddress: payment.pay_address,
@@ -259,6 +332,15 @@ app.get('/api/crypto/status/:id', async (req, res) => {
     }
 
     const data = await statusRes.json();
+
+    // Actualizar estado en DB si el pago finalizó
+    if (data.payment_status === 'finished' && pool) {
+      await pool.query(
+        `UPDATE pagos SET estado = $1 WHERE tx_id = $2`,
+        ['finished', String(id)]
+      );
+    }
+
     res.json({
       status: data.payment_status,
       paymentId: data.payment_id,
@@ -275,7 +357,7 @@ app.get('/api/crypto/status/:id', async (req, res) => {
 
 // ─── Cripto: webhook IPN ─────────────────────────────────────────────────────
 
-app.post('/api/crypto/ipn', (req, res) => {
+app.post('/api/crypto/ipn', async (req, res) => {
   try {
     const signature = req.headers['x-nowpayments-sig'];
     if (!signature) {
@@ -283,7 +365,6 @@ app.post('/api/crypto/ipn', (req, res) => {
       return res.status(400).json({ error: 'Firma requerida' });
     }
 
-    // Ordenar las llaves del body alfabéticamente y recalcular firma
     const sorted = JSON.stringify(
       Object.keys(req.body)
         .sort()
@@ -303,13 +384,17 @@ app.post('/api/crypto/ipn', (req, res) => {
       return res.status(401).json({ error: 'Firma inválida' });
     }
 
-    const { payment_id, payment_status, price_amount, price_currency } =
-      req.body;
-    console.log(
-      `IPN verificado: pago ${payment_id} → ${payment_status} (${price_amount} ${price_currency})`
-    );
+    const { payment_id, payment_status, price_amount, price_currency } = req.body;
+    console.log(`IPN verificado: pago ${payment_id} → ${payment_status} (${price_amount} ${price_currency})`);
 
-    // Aquí puedes guardar en DB, enviar email, etc.
+    // Actualizar estado en DB
+    if (pool) {
+      await pool.query(
+        `UPDATE pagos SET estado = $1 WHERE tx_id = $2`,
+        [payment_status, String(payment_id)]
+      );
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error('Error en IPN:', err.message);
