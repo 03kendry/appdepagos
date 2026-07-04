@@ -15,9 +15,34 @@ const {
   NOWPAYMENTS_API_KEY,
   NOWPAYMENTS_IPN_SECRET,
   DATABASE_URL,
+  ADMIN_PASSWORD,
   PORT = 3000,
   BASE_URL = 'http://localhost:3000',
 } = process.env;
+
+// ─── Validación de entorno ───────────────────────────────────────────────────
+
+const REQUIRED_ENV = {
+  PAYPAL_CLIENT_SECRET,
+  NOWPAYMENTS_API_KEY,
+  DATABASE_URL,
+  ADMIN_PASSWORD,
+};
+
+const envErrors = [];
+for (const [name, value] of Object.entries(REQUIRED_ENV)) {
+  if (!value) {
+    envErrors.push(`${name} no está definida`);
+  } else if (value.length < 16) {
+    envErrors.push(`${name} debe tener mínimo 16 caracteres`);
+  }
+}
+
+if (envErrors.length > 0) {
+  console.error('❌ Configuración inválida. Corrige tu .env (ver .env.example):');
+  for (const e of envErrors) console.error(`   - ${e}`);
+  process.exit(1);
+}
 
 const PAYPAL_BASE =
   PAYPAL_MODE === 'live'
@@ -123,9 +148,35 @@ app.get('/api/config', async (req, res) => {
   }
 });
 
+// ─── Admin: login ────────────────────────────────────────────────────────────
+
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  if (!password || password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Contraseña incorrecta' });
+  }
+  const token = crypto
+    .createHmac('sha256', ADMIN_PASSWORD)
+    .update('admin-token')
+    .digest('hex');
+  res.json({ token });
+});
+
+function checkAdmin(req, res, next) {
+  const auth = req.headers['x-admin-token'];
+  const expected = crypto
+    .createHmac('sha256', ADMIN_PASSWORD)
+    .update('admin-token')
+    .digest('hex');
+  if (!auth || auth !== expected) {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  next();
+}
+
 // ─── Ruta: historial de pagos ────────────────────────────────────────────────
 
-app.get('/api/pagos', async (req, res) => {
+app.get('/api/pagos', checkAdmin, async (req, res) => {
   if (!pool) return res.json([]);
   try {
     const result = await pool.query(

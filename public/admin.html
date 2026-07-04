@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — Pagos</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+
+    /* Login */
+    #login-view {
+      display: flex; align-items: center; justify-content: center; height: 100vh;
+    }
+    .login-box {
+      background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px;
+      padding: 40px; width: 340px; text-align: center;
+    }
+    .login-box h1 { font-size: 20px; margin-bottom: 8px; }
+    .login-box p { color: #888; font-size: 13px; margin-bottom: 24px; }
+    .login-box input {
+      width: 100%; padding: 10px 14px; background: #111; border: 1px solid #333;
+      border-radius: 8px; color: #fff; font-size: 14px; margin-bottom: 12px;
+    }
+    .login-box button {
+      width: 100%; padding: 10px; background: #7c3aed; border: none;
+      border-radius: 8px; color: #fff; font-size: 14px; cursor: pointer; font-weight: 600;
+    }
+    .login-box button:hover { background: #6d28d9; }
+    .error { color: #f87171; font-size: 13px; margin-top: 8px; }
+
+    /* Dashboard */
+    #admin-view { display: none; padding: 32px; max-width: 1100px; margin: 0 auto; }
+    .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
+    .top-bar h1 { font-size: 22px; }
+    .btn-logout {
+      background: transparent; border: 1px solid #444; color: #aaa;
+      padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
+    }
+    .btn-logout:hover { border-color: #888; color: #fff; }
+
+    /* Stats */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .stat-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 20px; }
+    .stat-card .label { font-size: 12px; color: #888; margin-bottom: 6px; }
+    .stat-card .value { font-size: 26px; font-weight: 700; }
+
+    /* Tabla */
+    .table-wrap { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; overflow: hidden; }
+    .table-header { padding: 16px 20px; border-bottom: 1px solid #2a2a2a; display: flex; justify-content: space-between; align-items: center; }
+    .table-header h2 { font-size: 15px; }
+    .btn-refresh {
+      background: #7c3aed; border: none; color: #fff; padding: 6px 14px;
+      border-radius: 8px; cursor: pointer; font-size: 13px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { padding: 10px 16px; text-align: left; color: #888; font-weight: 500; border-bottom: 1px solid #222; }
+    td { padding: 12px 16px; border-bottom: 1px solid #1e1e1e; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1f1f1f; }
+
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600;
+    }
+    .badge-paypal { background: #1a3a5c; color: #60a5fa; }
+    .badge-crypto { background: #1a3a2a; color: #34d399; }
+    .badge-completed { background: #14532d; color: #4ade80; }
+    .badge-pending { background: #3a2a00; color: #fbbf24; }
+    .badge-failed { background: #3a1a1a; color: #f87171; }
+
+    .empty { text-align: center; padding: 48px; color: #555; }
+  </style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-view">
+  <div class="login-box">
+    <h1>🔒 Panel de Admin</h1>
+    <p>Ingresa tu contraseña para ver los pagos</p>
+    <input type="password" id="pwd-input" placeholder="Contraseña" />
+    <button onclick="login()">Entrar</button>
+    <div class="error hidden" id="login-error"></div>
+  </div>
+</div>
+
+<!-- Dashboard -->
+<div id="admin-view">
+  <div class="top-bar">
+    <h1>⚡ Panel de Pagos</h1>
+    <button class="btn-logout" onclick="logout()">Cerrar sesión</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat-card">
+      <div class="label">Total recaudado</div>
+      <div class="value" id="stat-total">$0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Pagos completados</div>
+      <div class="value" id="stat-completed">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Pagos pendientes</div>
+      <div class="value" id="stat-pending">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Total de pagos</div>
+      <div class="value" id="stat-total-count">0</div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-header">
+      <h2>Historial de pagos</h2>
+      <button class="btn-refresh" onclick="cargarPagos()">↻ Actualizar</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Tipo</th>
+          <th>Monto</th>
+          <th>Moneda</th>
+          <th>Estado</th>
+          <th>Concepto</th>
+          <th>TX ID</th>
+          <th>Fecha</th>
+        </tr>
+      </thead>
+      <tbody id="pagos-body">
+        <tr><td colspan="8" class="empty">Cargando…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  let token = sessionStorage.getItem('admin_token');
+  if (token) mostrarAdmin();
+
+  function login() {
+    const pwd = document.getElementById('pwd-input').value;
+    fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwd }),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.token) {
+        token = data.token;
+        sessionStorage.setItem('admin_token', token);
+        mostrarAdmin();
+      } else {
+        document.getElementById('login-error').textContent = data.error || 'Error';
+        document.getElementById('login-error').classList.remove('hidden');
+      }
+    })
+    .catch(() => {
+      document.getElementById('login-error').textContent = 'Error de conexión';
+      document.getElementById('login-error').classList.remove('hidden');
+    });
+  }
+
+  document.getElementById('pwd-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') login();
+  });
+
+  function logout() {
+    sessionStorage.removeItem('admin_token');
+    token = null;
+    document.getElementById('admin-view').style.display = 'none';
+    document.getElementById('login-view').style.display = 'flex';
+  }
+
+  function mostrarAdmin() {
+    document.getElementById('login-view').style.display = 'none';
+    document.getElementById('admin-view').style.display = 'block';
+    cargarPagos();
+  }
+
+  function cargarPagos() {
+    fetch('/api/pagos', { headers: { 'x-admin-token': token } })
+    .then(r => {
+      if (r.status === 401) { logout(); return []; }
+      return r.json();
+    })
+    .then(pagos => {
+      renderTabla(pagos);
+      renderStats(pagos);
+    })
+    .catch(() => {
+      document.getElementById('pagos-body').innerHTML =
+        '<tr><td colspan="8" class="empty">Error al cargar pagos</td></tr>';
+    });
+  }
+
+  function renderStats(pagos) {
+    const completados = pagos.filter(p => p.estado === 'COMPLETED' || p.estado === 'finished');
+    const pendientes = pagos.filter(p => !['COMPLETED','finished','failed','expired','refunded'].includes(p.estado));
+    const total = completados.reduce((sum, p) => sum + parseFloat(p.monto || 0), 0);
+
+    document.getElementById('stat-total').textContent = '$' + total.toFixed(2);
+    document.getElementById('stat-completed').textContent = completados.length;
+    document.getElementById('stat-pending').textContent = pendientes.length;
+    document.getElementById('stat-total-count').textContent = pagos.length;
+  }
+
+  function renderTabla(pagos) {
+    const tbody = document.getElementById('pagos-body');
+    if (!pagos.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">No hay pagos aún</td></tr>';
+      return;
+    }
+    tbody.innerHTML = pagos.map(p => {
+      const fecha = new Date(p.creado_en).toLocaleString('es-DO');
+      const tipoBadge = p.tipo === 'paypal'
+        ? '<span class="badge badge-paypal">PayPal</span>'
+        : '<span class="badge badge-crypto">Cripto</span>';
+      const estadoClass = ['COMPLETED','finished'].includes(p.estado)
+        ? 'badge-completed'
+        : ['failed','expired','refunded'].includes(p.estado)
+        ? 'badge-failed'
+        : 'badge-pending';
+      return `<tr>
+        <td>${p.id}</td>
+        <td>${tipoBadge}</td>
+        <td>$${parseFloat(p.monto || 0).toFixed(2)}</td>
+        <td>${(p.moneda || '').toUpperCase()}</td>
+        <td><span class="badge ${estadoClass}">${p.estado}</span></td>
+        <td>${p.concepto || '—'}</td>
+        <td style="font-size:11px;color:#666">${p.tx_id ? p.tx_id.slice(0,20) + '…' : '—'}</td>
+        <td>${fecha}</td>
+      </tr>`;
+    }).join('');
+  }
+</script>
+</body>
+</html>
