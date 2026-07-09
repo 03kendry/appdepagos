@@ -107,3 +107,125 @@ Criptos aceptadas: **USDT (priorizar TRC20 por fees bajos), BTC, ETH** + popular
 - [ ] El webhook IPN rechaza peticiones con firma inválida.
 - [ ] El Secret de PayPal y las llaves de NOWPayments nunca llegan al frontend.
 - [ ] La página se ve bien en celular y en desktop.
+
+---
+
+## PayPal NCP (No-Code Checkout)
+
+Tercer método de pago: pay links hosteados por PayPal. El servidor arranca y la
+UI se ve completa **sin credenciales de PayPal** (el método aparece
+"Próximamente"); todo lo que depende de credenciales se activa siguiendo
+`RUNBOOK_NCP.md`.
+
+### Limitaciones de NCP (dictan todo el diseño)
+
+- **Los links se crean MANUALMENTE** en el dashboard de PayPal Business
+  (`https://www.paypal.com/ncp/payment/<ID>`). **No hay API para crearlos**;
+  el código nunca intenta generarlos.
+- El checkout es **100% del lado de PayPal**: no acepta metadata ni `order_id`
+  por query param (solo `locale.x` / `country.x`). No hay forma directa de
+  correlacionar el pago con la orden local.
+- **Sin monto dinámico real**: cada link tiene monto fijo, salvo que se
+  configure como "el cliente ingresa el monto" (`tipo: "monto_abierto"`).
+- La **confirmación es asíncrona**: llega por webhook
+  (`PAYMENT.CAPTURE.COMPLETED`) o por reconciliación con la Transaction
+  Search API — nunca de forma síncrona en el checkout.
+- La correlación se resuelve con un **código de referencia** (`NXP-XXXXXX`)
+  que el cliente pega en el campo personalizado "Código de referencia" del
+  link **antes de pagar**. Si no lo hace, el pago cae a revisión manual.
+
+### Configuración
+
+- `PAYPAL_NCP_LINKS_CONFIG`: JSON inline o ruta a `.json` con los links:
+  `{ id, nombre, monto, moneda, url, tipo: "fijo"|"monto_abierto", activo }`.
+  Si falta, el módulo NCP queda inactivo sin romper nada.
+- `PAYPAL_WEBHOOK_ID`: obligatorio para procesar webhooks (la verificación de
+  firma con la API oficial es innegociable; sin él, el endpoint rechaza todo).
+- `NCP_ORDER_TTL_MINUTES` (default 60): expiración de órdenes pendientes.
+- `NCP_MATCH_WINDOW_MINUTES` (default 90): ventana del matching heurístico.
+
+### Estados de una orden NCP (columna `estado` de `pagos`, tipo `ncp`)
+
+| Estado | Significado |
+|---|---|
+| `waiting` | Orden creada, esperando confirmación de PayPal |
+| `pending_review` | Pago recibido pero sin match automático confiable → revisión manual |
+| `finished` | Pago confirmado (código de referencia + monto + moneda coinciden) |
+| `expired` | La orden superó su TTL sin confirmación |
+
+Reglas de matching (webhook y reconciliación comparten lógica e idempotencia
+por `transaction_id`):
+1. Payload con código `NXP-XXXXXX` válido + monto y moneda correctos → `finished`.
+2. Código válido pero monto/moneda distintos, u orden expirada → `pending_review`.
+3. Sin código: heurística monto + moneda + ventana de tiempo con **exactamente
+   una** candidata → `pending_review`. **Nunca se marca pagada sin código.**
+4. Sin match: se inserta una fila `pending_review` con el pago huérfano.
+
+### Endpoints nuevos
+
+| Método | Ruta | Función |
+|---|---|---|
+| POST | `/api/ncp/create-order` | Selecciona link, genera código de referencia, crea orden `waiting` |
+| GET | `/api/ncp/status/:reference` | Estado de la orden (polling del frontend; expira on-read) |
+| POST | `/api/paypal/webhook` | `PAYMENT.CAPTURE.COMPLETED` con verificación de firma obligatoria |
+
+Reconciliación fallback: `npm run reconcile [-- --hours N]` consulta
+`/v1/reporting/transactions` (Transaction Search) con el mismo matching.
+
+### Diagrama de secuencia del flujo completo
+
+```
+Cliente          Frontend                Backend               PayPal
+  │                 │                       │                     │
+  │ monto+concepto  │                       │                     │
+  │ elige "PayPal"  │                       │                     │
+  │────────────────►│                       │                     │
+  │                 │ POST /api/ncp/create-order                  │
+  │                 │──────────────────────►│                     │
+  │                 │                       │ selecciona link     │
+  │                 │                       │ (fijo exacto →      │
+  │                 │                       │  monto_abierto)     │
+  │                 │                       │ genera NXP-XXXXXX   │
+  │                 │                       │ INSERT orden waiting│
+  │                 │ {url, referenceCode,  │                     │
+  │                 │  instructions}        │                     │
+  │                 │◄──────────────────────│                     │
+  │  pantalla NCP:  │                       │                     │
+  │  código GRANDE + copiar                 │                     │
+  │  pasos 1-2-3 + advertencia monto exacto │                     │
+  │◄────────────────│                       │                     │
+  │ 1. copia código │                       │                     │
+  │ 2. "Pagar en PayPal" (pestaña nueva)    │                     │
+  │────────────────────────────────────────────────────────────► │
+  │ 3. pega código en "Código de referencia" y paga               │
+  │                 │ polling GET /api/ncp/status/:ref cada 10s   │
+  │                 │──────────────────────►│                     │
+  │                 │   {status: waiting}   │                     │
+  │                 │                       │  webhook PAYMENT.   │
+  │                 │                       │  CAPTURE.COMPLETED  │
+  │                 │                       │◄────────────────────│
+  │                 │                       │ verifica FIRMA      │
+  │                 │                       │ (API oficial)       │
+  │                 │                       │ matching por código │
+  │                 │                       │ → estado finished   │
+  │                 │ {status: finished}    │                     │
+  │                 │◄──────────────────────│                     │
+  │ pantalla de éxito (check animado, tx, monto, método)          │
+  │◄────────────────│                       │                     │
+  │                 │                       │                     │
+  │  [fallback]     │                       │  npm run reconcile  │
+  │                 │                       │  Transaction Search │
+  │                 │                       │─────────────────────►
+  │                 │                       │  mismo matching     │
+  │  [sin código]   │                       │  → pending_review   │
+  │  [TTL vencido]  │                       │  → expired          │
+```
+
+### Criterios de aceptación NCP
+
+- [ ] El servidor arranca sin ninguna variable de PayPal (warning + método "Próximamente").
+- [ ] Con `PAYPAL_NCP_LINKS_CONFIG` válida, el flujo UI completo funciona hasta "Esperando confirmación".
+- [ ] El webhook rechaza payloads sin firma verificada (nunca procesa sin verificar).
+- [ ] Un pago sin código de referencia jamás se marca pagado automáticamente.
+- [ ] El mismo `transaction_id` nunca se procesa dos veces (webhook y reconciliación).
+- [ ] `npm test` pasa sin base de datos ni credenciales.

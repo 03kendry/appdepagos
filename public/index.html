@@ -54,12 +54,17 @@
           <div class="method-card active" data-method="card" id="method-card">
             <span class="method-icon">💳</span>
             <div class="method-name">Tarjeta</div>
-            <div class="method-sub">vía PayPal</div>
+            <div class="method-sub" data-default-sub="vía PayPal">vía PayPal</div>
+          </div>
+          <div class="method-card" data-method="ncp" id="method-ncp">
+            <span class="method-icon">🅿️</span>
+            <div class="method-name">PayPal</div>
+            <div class="method-sub" data-default-sub="link de pago">link de pago</div>
           </div>
           <div class="method-card" data-method="crypto" id="method-crypto">
             <span class="method-icon">🪙</span>
             <div class="method-name">Cripto</div>
-            <div class="method-sub">BTC, ETH, USDT…</div>
+            <div class="method-sub" data-default-sub="BTC, ETH, USDT…">BTC, ETH, USDT…</div>
           </div>
         </div>
       </div>
@@ -75,13 +80,64 @@
       <!-- Error general -->
       <div id="form-error" class="error-msg hidden"></div>
 
-      <!-- Botón cripto / PayPal SDK -->
+      <!-- Botón cripto / PayPal SDK / PayPal NCP -->
       <div id="action-area">
         <!-- PayPal renderiza sus botones aquí -->
         <div id="paypal-buttons-container"></div>
         <!-- Botón para cripto -->
         <button class="btn-pay hidden" id="btn-crypto-pay">Continuar con Cripto →</button>
+        <!-- Botón para PayPal NCP -->
+        <button class="btn-pay hidden" id="btn-ncp-pay">Continuar con PayPal →</button>
       </div>
+    </div>
+
+    <!-- ── Vista pago PayPal NCP ── -->
+    <div class="card hidden" id="ncp-view">
+      <div class="card-header">
+        <h1>Paga con PayPal</h1>
+        <p>Tu código de referencia nos permite identificar tu pago. Sigue los 3 pasos.</p>
+      </div>
+
+      <div class="ref-block">
+        <span class="ref-label">Tu código de referencia</span>
+        <div class="ref-code" id="ref-code">—</div>
+        <button class="btn-copy" id="copy-ref">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          Copiar código
+        </button>
+      </div>
+
+      <ol class="ncp-steps">
+        <li><span><strong>Copia</strong> tu código de referencia.</span></li>
+        <li><span>Serás llevado a <strong>PayPal</strong> en una pestaña nueva.</span></li>
+        <li><span>Pega el código en el campo <strong>«Código de referencia»</strong> <u>antes</u> de pagar.</span></li>
+      </ol>
+
+      <div class="ncp-amount-row">
+        <span class="ticket-label">Monto a pagar</span>
+        <span class="ticket-value amount" id="ncp-amount">—</span>
+      </div>
+
+      <div class="warning-msg hidden" id="ncp-open-amount-warning"></div>
+
+      <a class="btn-pay btn-link" id="btn-open-paypal" href="#" target="_blank" rel="noopener noreferrer">Pagar en PayPal ↗</a>
+
+      <div class="status-bar">
+        <div class="status-dot waiting" id="ncp-status-dot"></div>
+        <span id="ncp-status-text">Esperando confirmación del pago…</span>
+      </div>
+
+      <div class="info-msg hidden" id="ncp-review-msg">
+        Recibimos un pago que coincide con tu orden y está <strong>en revisión manual</strong>.
+        No necesitas hacer nada más: guarda tu código de referencia como comprobante.
+      </div>
+
+      <div class="warning-msg hidden" id="ncp-expired-msg">
+        La orden expiró sin confirmación. Si <strong>ya pagaste</strong>, contacta al vendedor
+        con tu código de referencia. Si no, genera un nuevo pago.
+      </div>
+
+      <button class="btn-retry hidden" id="btn-ncp-retry">↩ Generar nuevo pago</button>
     </div>
 
     <!-- ── Vista ticket cripto ── -->

@@ -1,0 +1,24 @@
+{
+  "id": "WH-2WR32451HC0233532-67976317FL4543714",
+  "event_version": "1.0",
+  "create_time": "2026-07-08T15:20:00.000Z",
+  "resource_type": "capture",
+  "event_type": "PAYMENT.CAPTURE.COMPLETED",
+  "summary": "Payment completed for $ 25.0 USD",
+  "resource": {
+    "id": "42311647XV020574X",
+    "status": "COMPLETED",
+    "amount": { "currency_code": "USD", "value": "25.00" },
+    "final_capture": true,
+    "custom_id": "NXP-A7F3K2",
+    "seller_protection": { "status": "ELIGIBLE" },
+    "seller_receivable_breakdown": {
+      "gross_amount": { "currency_code": "USD", "value": "25.00" },
+      "paypal_fee": { "currency_code": "USD", "value": "1.34" },
+      "net_amount": { "currency_code": "USD", "value": "23.66" }
+    },
+    "create_time": "2026-07-08T15:19:45Z",
+    "update_time": "2026-07-08T15:19:45Z",
+    "links": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "WH-58D93A57WM847533B-77436221GN3344913",
+  "event_version": "1.0",
+  "create_time": "2026-07-08T16:05:00.000Z",
+  "resource_type": "capture",
+  "event_type": "PAYMENT.CAPTURE.COMPLETED",
+  "summary": "Payment completed for $ 40.0 USD",
+  "resource": {
+    "id": "9XW11223BB556677C",
+    "status": "COMPLETED",
+    "amount": { "currency_code": "USD", "value": "40.00" },
+    "final_capture": true,
+    "seller_protection": { "status": "ELIGIBLE" },
+    "seller_receivable_breakdown": {
+      "gross_amount": { "currency_code": "USD", "value": "40.00" },
+      "paypal_fee": { "currency_code": "USD", "value": "1.90" },
+      "net_amount": { "currency_code": "USD", "value": "38.10" }
+    },
+    "create_time": "2026-07-08T16:04:30Z",
+    "update_time": "2026-07-08T16:04:30Z",
+    "links": []
+  }
+}

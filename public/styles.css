@@ -167,7 +167,7 @@ select {
 /* ── Selector de método ── */
 .method-selector {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   margin-bottom: 24px;
 }
@@ -195,6 +195,22 @@ select {
 
 .method-card:active {
   transform: scale(0.98);
+}
+
+.method-card.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
+.method-card.disabled:hover {
+  border-color: var(--border);
+  background: var(--surface2);
+}
+
+.method-card.disabled .method-sub {
+  color: var(--warning);
+  font-weight: 500;
 }
 
 .method-icon {
@@ -476,6 +492,115 @@ select {
 
 .btn-new:hover { border-color: var(--accent); }
 
+/* ── Pago PayPal NCP ── */
+.ref-block {
+  background: var(--surface2);
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.ref-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.ref-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: 3px;
+  color: var(--accent2);
+  margin-bottom: 14px;
+  user-select: all;
+  word-break: break-all;
+}
+
+.ref-block .btn-copy {
+  width: 100%;
+}
+
+.ncp-steps {
+  list-style: none;
+  counter-reset: paso;
+  margin-bottom: 20px;
+  padding: 0;
+}
+
+.ncp-steps li {
+  counter-increment: paso;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--text);
+  padding: 8px 0;
+}
+
+.ncp-steps li::before {
+  content: counter(paso);
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(108,99,255,0.15);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.ncp-amount-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.btn-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  text-align: center;
+}
+
+.warning-msg {
+  background: rgba(245,158,11,0.1);
+  border: 1px solid rgba(245,158,11,0.3);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 14px;
+  color: #fcd34d;
+  margin-bottom: 16px;
+}
+
+.info-msg {
+  background: rgba(108,99,255,0.1);
+  border: 1px solid rgba(108,99,255,0.3);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 14px;
+  color: var(--text);
+  margin-top: 12px;
+}
+
 /* ── Mensajes de error ── */
 .error-msg {
   background: rgba(239,68,68,0.1);
@@ -496,6 +621,8 @@ select {
   .card { padding: 24px 20px; }
   .card-header h1 { font-size: 20px; }
   .method-selector { gap: 8px; }
-  .method-card { padding: 14px 10px; }
+  .method-card { padding: 14px 8px; }
   .method-icon { font-size: 24px; }
+  .method-sub { font-size: 10px; }
+  .ref-code { font-size: 24px; letter-spacing: 2px; }
 }
