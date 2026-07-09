@@ -48,9 +48,16 @@
 1. El dueño entra a su dashboard Business → **Pay Links / No-Code Checkout**.
 2. Crea un link por cada monto frecuente (`tipo: "fijo"`) y opcionalmente uno
    donde el cliente ingresa el monto (`tipo: "monto_abierto"`).
-3. **CRÍTICO:** en cada link, agregar un campo personalizado llamado
-   exactamente **"Código de referencia"**. Sin ese campo el matching
-   automático no funciona y todos los pagos caerán a revisión manual.
+3. **Sobre el código de referencia:** el constructor de NCP **ya no permite
+   agregar campos personalizados** (solo envío, impuestos y handling fee), así
+   que el código `NXP-XXXXXX` **no viaja dentro del pago**. Por eso el flujo es
+   **manual-first**: el pago entra como **revisión manual** y el operador lo
+   confirma en `/admin.html` cruzando monto + fecha con el pago real en PayPal
+   (el código es el comprobante que muestra el cliente). *Opcionalmente*, si el
+   checkout le ofrece al comprador una **"nota para el vendedor"**, se le puede
+   pedir que pegue ahí su código: en ese caso `npm run reconcile` lo detecta
+   (lee `transaction_note`) y confirma el pago solo. No es obligatorio ni
+   confiable como único camino.
 4. El dueño comparte las URLs (`https://www.paypal.com/ncp/payment/<ID>`).
 5. Configurar en `.env` (JSON inline o ruta a un archivo .json):
    ```
@@ -64,23 +71,26 @@
 Ejecutar en orden; todos deben pasar:
 
 1. **Orden:** en la UI, monto que exista como link fijo → elegir PayPal →
-   verificar pantalla con código `NXP-XXXXXX`, pasos 1-2-3 y botón
+   verificar pantalla con código `NXP-XXXXXX`, los 3 pasos y botón
    "Pagar en PayPal".
-2. **Pago sandbox:** abrir el link con una cuenta personal sandbox, pegar el
-   código en "Código de referencia" y pagar.
+2. **Pago sandbox:** abrir el link con una cuenta personal sandbox y pagar.
 3. **Webhook verificado:** en los logs del servidor debe aparecer
-   `Webhook PayPal procesado: paid (orden N)`. Un payload manipulado o sin
+   `Webhook PayPal procesado: pending_review` (sin un campo que lleve el código,
+   el pago cae a revisión manual, no a `paid`). Un payload manipulado o sin
    firma debe responder 401.
-4. **Orden pagada:** la UI pasa sola de "Esperando confirmación del pago…" a
-   la pantalla de éxito (polling cada 10s). En `/admin.html` la orden aparece
-   `finished` con el `transaction_id`.
-5. **Idempotencia:** desde el dashboard de developer.paypal.com → Webhooks →
+4. **Revisión manual (camino por defecto):** en `/admin.html` el pago aparece
+   como **"Revisión manual"**. Cruzar monto + fecha con la orden y pulsar
+   **✓ Confirmar** → pasa a "Completado". La UI del cliente pasa sola de
+   "Esperando confirmación del pago…" a la pantalla de éxito (polling cada 10s).
+5. **Rechazo:** en un pago que no corresponda, pulsar **✕ Rechazar** en
+   `/admin.html` → pasa a "Expirado" y no cuenta como recaudado.
+6. **Idempotencia:** desde el dashboard de developer.paypal.com → Webhooks →
    reenviar (resend) el mismo evento. El log debe decir `duplicate` y la orden
    no debe cambiar.
-6. **Reconciliación:** `npm run reconcile -- --hours 1` debe reportar la
-   transacción como ya procesada (`duplicate`) y no duplicar nada.
-7. **Sin código:** repetir un pago sandbox SIN pegar el código → la orden debe
-   quedar `pending_review` (nunca `finished`) y visible en `/admin.html`.
+7. **Reconciliación:** `npm run reconcile -- --hours 1` debe reportar la
+   transacción como ya procesada (`duplicate`). Si el comprador **sí** pegó el
+   código en la nota para el vendedor, un pago cuyo webhook se perdió se
+   confirma solo (`paid`) por este comando.
 
 ## Paso 6 — Pasar a producción
 
@@ -90,9 +100,13 @@ Ejecutar en orden; todos deben pasar:
 
 ## Operación diaria
 
+- **Confirmar los `pending_review` en `/admin.html`** es la tarea diaria
+  principal del flujo NCP: cada fila muestra el código de referencia (columna
+  **Ref.**) y, al pasar el cursor sobre el estado, la **nota** que explica por
+  qué cayó ahí (sin código, monto distinto, orden expirada…). Cruzar con el
+  pago real en PayPal y pulsar **✓ Confirmar** o **✕ Rechazar**.
 - `npm run reconcile` (últimas 24h) como cron diario o manual: atrapa pagos
-  cuyo webhook se perdió y expira órdenes pendientes viejas.
-- Revisar `pending_review` en `/admin.html`: la columna `nota` explica por qué
-  cada pago cayó ahí (sin código, monto distinto, orden expirada, etc.).
+  cuyo webhook se perdió, confirma solo los que traen el código en la nota, y
+  expira órdenes pendientes viejas.
 - Las órdenes `waiting` expiran solas a los `NCP_ORDER_TTL_MINUTES` (60 por
   defecto).

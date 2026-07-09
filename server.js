@@ -244,6 +244,39 @@ app.get('/api/pagos', checkAdmin, async (req, res) => {
   }
 });
 
+// ─── Admin: confirmar/rechazar un pago manualmente ───────────────────────────
+// Núcleo del flujo NCP manual-first: como los pay links no llevan el código de
+// referencia en el pago (PayPal ya no permite campos personalizados), la
+// mayoría de los pagos NCP entran en pending_review y un operador los resuelve
+// aquí tras cruzar monto/fecha con el pago real en PayPal.
+
+app.post('/api/admin/pagos/:id/confirmar', checkAdmin, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Base de datos no disponible' });
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: 'ID inválido' });
+    }
+    const { accion } = req.body;
+    if (!['confirmar', 'rechazar'].includes(accion)) {
+      return res.status(400).json({ error: 'Acción inválida (usa "confirmar" o "rechazar")' });
+    }
+
+    const row =
+      accion === 'confirmar'
+        ? await ncpStore.adminConfirm(id)
+        : await ncpStore.adminReject(id);
+
+    if (!row) return res.status(404).json({ error: 'Pago no encontrado' });
+
+    console.log(`Admin ${accion === 'confirmar' ? 'confirmó' : 'rechazó'} el pago ${id} → ${row.estado}`);
+    res.json({ id: row.id, estado: row.estado });
+  } catch (err) {
+    console.error('Error en admin confirmar:', err.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 // ─── PayPal: crear orden ─────────────────────────────────────────────────────
 
 app.post('/api/paypal/create-order', async (req, res) => {
