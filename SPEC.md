@@ -130,9 +130,14 @@ UI se ve completa **sin credenciales de PayPal** (el método aparece
 - La **confirmación es asíncrona**: llega por webhook
   (`PAYMENT.CAPTURE.COMPLETED`) o por reconciliación con la Transaction
   Search API — nunca de forma síncrona en el checkout.
-- La correlación se resuelve con un **código de referencia** (`NXP-XXXXXX`)
-  que el cliente pega en el campo personalizado "Código de referencia" del
-  link **antes de pagar**. Si no lo hace, el pago cae a revisión manual.
+- **NCP ya no permite campos personalizados** en los pay links (solo envío,
+  impuestos y handling fee), así que el **código de referencia** (`NXP-XXXXXX`)
+  **no viaja dentro del pago**. El flujo es **manual-first**: el pago entra en
+  `pending_review` y un operador lo confirma en `/admin.html` cruzando
+  monto + fecha con el pago real (el código es el comprobante del cliente).
+  El matching automático por código sigue activo de forma **oportunista**: si
+  el comprador pega el código en la "nota para el vendedor", la reconciliación
+  (`transaction_note` vía Transaction Search) lo confirma solo.
 
 ### Configuración
 
@@ -150,7 +155,7 @@ UI se ve completa **sin credenciales de PayPal** (el método aparece
 |---|---|
 | `waiting` | Orden creada, esperando confirmación de PayPal |
 | `pending_review` | Pago recibido pero sin match automático confiable → revisión manual |
-| `finished` | Pago confirmado (código de referencia + monto + moneda coinciden) |
+| `finished` | Pago confirmado (por el operador en `/admin.html`, o auto si el código llegó en la nota) |
 | `expired` | La orden superó su TTL sin confirmación |
 
 Reglas de matching (webhook y reconciliación comparten lógica e idempotencia
@@ -168,6 +173,7 @@ por `transaction_id`):
 | POST | `/api/ncp/create-order` | Selecciona link, genera código de referencia, crea orden `waiting` |
 | GET | `/api/ncp/status/:reference` | Estado de la orden (polling del frontend; expira on-read) |
 | POST | `/api/paypal/webhook` | `PAYMENT.CAPTURE.COMPLETED` con verificación de firma obligatoria |
+| POST | `/api/admin/pagos/:id/confirmar` | Confirmar/rechazar manualmente un pago (admin; body `{ accion }`) |
 
 Reconciliación fallback: `npm run reconcile [-- --hours N]` consulta
 `/v1/reporting/transactions` (Transaction Search) con el mismo matching.
@@ -194,10 +200,10 @@ Cliente          Frontend                Backend               PayPal
   │  código GRANDE + copiar                 │                     │
   │  pasos 1-2-3 + advertencia monto exacto │                     │
   │◄────────────────│                       │                     │
-  │ 1. copia código │                       │                     │
-  │ 2. "Pagar en PayPal" (pestaña nueva)    │                     │
+  │ 1. guarda código│                       │                     │
+  │ 2. "Pagar en PayPal" (pestaña nueva) y paga                   │
   │────────────────────────────────────────────────────────────► │
-  │ 3. pega código en "Código de referencia" y paga               │
+  │    (NCP no tiene campo para el código; el pago no lo lleva)    │
   │                 │ polling GET /api/ncp/status/:ref cada 10s   │
   │                 │──────────────────────►│                     │
   │                 │   {status: waiting}   │                     │
@@ -206,8 +212,16 @@ Cliente          Frontend                Backend               PayPal
   │                 │                       │◄────────────────────│
   │                 │                       │ verifica FIRMA      │
   │                 │                       │ (API oficial)       │
-  │                 │                       │ matching por código │
-  │                 │                       │ → estado finished   │
+  │                 │                       │ sin código →        │
+  │                 │                       │ heurística monto+   │
+  │                 │                       │ fecha → pending_    │
+  │                 │                       │ review              │
+  │                 │ {status: pending_review}                    │
+  │                 │◄──────────────────────│                     │
+  │  "Esperando confirmación del pago…"     │                     │
+  │                 │                       │ Admin ✓ Confirmar   │
+  │                 │                       │ (/admin.html) →     │
+  │                 │                       │ estado finished     │
   │                 │ {status: finished}    │                     │
   │                 │◄──────────────────────│                     │
   │ pantalla de éxito (check animado, tx, monto, método)          │

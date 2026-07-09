@@ -28,10 +28,13 @@ const NCP_STATES = {
   EXPIRED: 'expired',
 };
 
+// NCP ya no permite campos personalizados en los pay links, así que el código
+// no viaja dentro del pago: es el comprobante que usa el vendedor para
+// confirmar manualmente (o reconcile, si el comprador lo pega en la nota).
 const NCP_INSTRUCTIONS = [
-  'Copia tu código de referencia.',
-  'Serás llevado a PayPal en una pestaña nueva.',
-  'Pega el código en el campo "Código de referencia" ANTES de pagar.',
+  'Guarda tu código de referencia: es tu comprobante.',
+  'Paga en PayPal (se abre en una pestaña nueva). Si te ofrece una nota para el vendedor, incluye ahí tu código.',
+  'El vendedor confirmará tu pago. Puede tardar un poco.',
 ];
 
 // ─── Configuración de links ──────────────────────────────────────────────────

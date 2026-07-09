@@ -65,6 +65,25 @@ function createPgStore(pool) {
       return r.rows[0].id;
     },
 
+    // Confirmación/rechazo manual desde el panel admin (flujo NCP manual-first).
+    // Un operador decide sobre una orden en pending_review cruzando monto/fecha
+    // con el pago real en PayPal.
+    async adminConfirm(id) {
+      const r = await pool.query(
+        `UPDATE pagos SET estado = $2 WHERE id = $1 RETURNING id, estado`,
+        [id, NCP_STATES.FINISHED]
+      );
+      return r.rows[0] || null;
+    },
+
+    async adminReject(id) {
+      const r = await pool.query(
+        `UPDATE pagos SET estado = $2 WHERE id = $1 RETURNING id, estado`,
+        [id, NCP_STATES.EXPIRED]
+      );
+      return r.rows[0] || null;
+    },
+
     // Marca la orden como expirada si su fecha ya pasó (expiración on-read)
     async expireIfDue(order) {
       if (

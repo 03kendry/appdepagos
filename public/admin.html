@@ -66,7 +66,19 @@
     .badge-crypto { background: #1a3a2a; color: #34d399; }
     .badge-completed { background: #14532d; color: #4ade80; }
     .badge-pending { background: #3a2a00; color: #fbbf24; }
+    .badge-review { background: #3a2a00; color: #fbbf24; cursor: help; }
     .badge-failed { background: #3a1a1a; color: #f87171; }
+
+    /* Acciones de confirmación manual */
+    .btn-action {
+      padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+      cursor: pointer; border: 1px solid; background: transparent; margin-right: 4px;
+    }
+    .btn-confirm { color: #4ade80; border-color: #14532d; }
+    .btn-confirm:hover { background: #14532d; color: #fff; }
+    .btn-reject { color: #f87171; border-color: #3a1a1a; }
+    .btn-reject:hover { background: #3a1a1a; color: #fff; }
+    .ref-cell { font-family: ui-monospace, monospace; font-size: 12px; color: #a78bfa; }
 
     .empty { text-align: center; padding: 48px; color: #555; }
   </style>
@@ -123,13 +135,15 @@
           <th>Monto</th>
           <th>Moneda</th>
           <th>Estado</th>
+          <th>Ref.</th>
           <th>Concepto</th>
           <th>TX ID</th>
           <th>Fecha</th>
+          <th>Acciones</th>
         </tr>
       </thead>
       <tbody id="pagos-body">
-        <tr><td colspan="8" class="empty">Cargando…</td></tr>
+        <tr><td colspan="10" class="empty">Cargando…</td></tr>
       </tbody>
     </table>
   </div>
@@ -207,33 +221,77 @@
     document.getElementById('stat-total-count').textContent = pagos.length;
   }
 
+  const TIPO_BADGES = {
+    paypal: '<span class="badge badge-paypal">PayPal</span>',
+    ncp:    '<span class="badge badge-paypal">PayPal</span>',
+    crypto: '<span class="badge badge-crypto">Cripto</span>',
+  };
+
+  const ESTADO_LABELS = {
+    finished: 'Completado', COMPLETED: 'Completado',
+    waiting: 'Esperando', pending_review: 'Revisión manual',
+    expired: 'Expirado', failed: 'Fallido', refunded: 'Reembolsado',
+  };
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
   function renderTabla(pagos) {
     const tbody = document.getElementById('pagos-body');
     if (!pagos.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty">No hay pagos aún</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="empty">No hay pagos aún</td></tr>';
       return;
     }
     tbody.innerHTML = pagos.map(p => {
       const fecha = new Date(p.creado_en).toLocaleString('es-DO');
-      const tipoBadge = p.tipo === 'paypal'
-        ? '<span class="badge badge-paypal">PayPal</span>'
-        : '<span class="badge badge-crypto">Cripto</span>';
+      const tipoBadge = TIPO_BADGES[p.tipo] || `<span class="badge">${escapeHtml(p.tipo || '—')}</span>`;
       const estadoClass = ['COMPLETED','finished'].includes(p.estado)
         ? 'badge-completed'
         : ['failed','expired','refunded'].includes(p.estado)
         ? 'badge-failed'
+        : p.estado === 'pending_review'
+        ? 'badge-review'
         : 'badge-pending';
+      const estadoLabel = ESTADO_LABELS[p.estado] || p.estado;
+      const notaAttr = p.nota ? ` title="${escapeHtml(p.nota)}"` : '';
+      const acciones = p.estado === 'pending_review'
+        ? `<button class="btn-action btn-confirm" onclick="resolver(${p.id}, 'confirmar')">✓ Confirmar</button>
+           <button class="btn-action btn-reject" onclick="resolver(${p.id}, 'rechazar')">✕ Rechazar</button>`
+        : '—';
       return `<tr>
         <td>${p.id}</td>
         <td>${tipoBadge}</td>
         <td>$${parseFloat(p.monto || 0).toFixed(2)}</td>
-        <td>${(p.moneda || '').toUpperCase()}</td>
-        <td><span class="badge ${estadoClass}">${p.estado}</span></td>
-        <td>${p.concepto || '—'}</td>
-        <td style="font-size:11px;color:#666">${p.tx_id ? p.tx_id.slice(0,20) + '…' : '—'}</td>
+        <td>${escapeHtml((p.moneda || '').toUpperCase())}</td>
+        <td><span class="badge ${estadoClass}"${notaAttr}>${escapeHtml(estadoLabel)}</span></td>
+        <td class="ref-cell">${p.referencia ? escapeHtml(p.referencia) : '—'}</td>
+        <td>${escapeHtml(p.concepto || '—')}</td>
+        <td style="font-size:11px;color:#666">${p.tx_id ? escapeHtml(p.tx_id.slice(0,20)) + '…' : '—'}</td>
         <td>${fecha}</td>
+        <td>${acciones}</td>
       </tr>`;
     }).join('');
+  }
+
+  function resolver(id, accion) {
+    const verbo = accion === 'confirmar' ? 'confirmar' : 'rechazar';
+    if (!confirm(`¿Seguro que deseas ${verbo} el pago #${id}?`)) return;
+    fetch(`/api/admin/pagos/${id}/confirmar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': token },
+      body: JSON.stringify({ accion }),
+    })
+    .then(r => {
+      if (r.status === 401) { logout(); return null; }
+      return r.json();
+    })
+    .then(data => {
+      if (data && data.estado) cargarPagos();
+      else if (data && data.error) alert(data.error);
+    })
+    .catch(() => alert('Error de conexión'));
   }
 </script>
 </body>
