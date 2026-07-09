@@ -3,15 +3,30 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const { Pool } = require('pg');
+const ncp = require('./ncp');
+const { createPgStore } = require('./ncp-store');
 
 const app = express();
-app.use(express.json());
+// rawBody se necesita para verificar la firma del webhook de PayPal sin
+// que la re-serialización del JSON altere el payload firmado
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 app.use(express.static(path.join(__dirname, 'public')));
 
 const {
   PAYPAL_CLIENT_ID,
   PAYPAL_CLIENT_SECRET,
+  PAYPAL_ENV,
   PAYPAL_MODE,
+  PAYPAL_WEBHOOK_ID,
+  PAYPAL_NCP_LINKS_CONFIG,
+  NCP_ORDER_TTL_MINUTES,
+  NCP_MATCH_WINDOW_MINUTES,
   NOWPAYMENTS_API_KEY,
   NOWPAYMENTS_IPN_SECRET,
   DATABASE_URL,
@@ -21,9 +36,12 @@ const {
 } = process.env;
 
 // ─── Validación de entorno ───────────────────────────────────────────────────
+// Obligatorias: sin ellas el servidor NO arranca.
+// Las variables de PayPal (REST y NCP) son OPCIONALES por ahora: si faltan se
+// avisa por consola y el método PayPal queda deshabilitado, pero NOWPayments
+// sigue funcionando solo. Ver RUNBOOK_NCP.md para activarlas.
 
 const REQUIRED_ENV = {
-  PAYPAL_CLIENT_SECRET,
   NOWPAYMENTS_API_KEY,
   DATABASE_URL,
   ADMIN_PASSWORD,
@@ -44,8 +62,34 @@ if (envErrors.length > 0) {
   process.exit(1);
 }
 
+const paypalEnabled = Boolean(PAYPAL_CLIENT_ID && PAYPAL_CLIENT_SECRET);
+if (!paypalEnabled) {
+  console.warn(
+    '⚠ PayPal sin credenciales (PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET): el método PayPal queda deshabilitado. El servidor arranca igual.'
+  );
+}
+
+const { links: ncpLinks, errors: ncpConfigErrors } = ncp.parseNcpLinks(PAYPAL_NCP_LINKS_CONFIG);
+ncpConfigErrors.forEach((e) => console.warn(`⚠ ${e}`));
+const ncpEnabled = ncpLinks.some((l) => l.activo);
+if (!ncpEnabled) {
+  console.warn(
+    '⚠ PAYPAL_NCP_LINKS_CONFIG vacía o inválida: el checkout PayPal NCP queda inactivo ("Próximamente" en la UI).'
+  );
+}
+
+if (!PAYPAL_WEBHOOK_ID) {
+  console.warn(
+    '⚠ PAYPAL_WEBHOOK_ID no definido: el webhook de PayPal rechazará todos los eventos (la verificación de firma es obligatoria).'
+  );
+}
+
+const NCP_TTL_MINUTES = parseInt(NCP_ORDER_TTL_MINUTES, 10) > 0 ? parseInt(NCP_ORDER_TTL_MINUTES, 10) : 60;
+const NCP_WINDOW_MINUTES = parseInt(NCP_MATCH_WINDOW_MINUTES, 10) > 0 ? parseInt(NCP_MATCH_WINDOW_MINUTES, 10) : 90;
+
+const PAYPAL_ENVIRONMENT = PAYPAL_ENV || PAYPAL_MODE || 'sandbox';
 const PAYPAL_BASE =
-  PAYPAL_MODE === 'live'
+  PAYPAL_ENVIRONMENT === 'live'
     ? 'https://api-m.paypal.com'
     : 'https://api-m.sandbox.paypal.com';
 
@@ -69,8 +113,17 @@ async function initDB() {
       creado_en   TIMESTAMP DEFAULT NOW()
     )
   `);
+  // Columnas NCP: código de referencia, expiración y nota de revisión
+  await pool.query(`ALTER TABLE pagos ADD COLUMN IF NOT EXISTS referencia VARCHAR(24)`);
+  await pool.query(`ALTER TABLE pagos ADD COLUMN IF NOT EXISTS expira_en TIMESTAMP`);
+  await pool.query(`ALTER TABLE pagos ADD COLUMN IF NOT EXISTS nota VARCHAR(300)`);
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS pagos_referencia_unica ON pagos (referencia) WHERE referencia IS NOT NULL`
+  );
   console.log('✅ Tabla pagos lista');
 }
+
+const ncpStore = createPgStore(pool);
 
 async function guardarPago({ tipo, monto, moneda, estado, tx_id, concepto }) {
   if (!pool) return;
@@ -139,7 +192,9 @@ app.get('/api/config', async (req, res) => {
     }
 
     res.json({
-      paypalClientId: PAYPAL_CLIENT_ID,
+      paypalClientId: paypalEnabled ? PAYPAL_CLIENT_ID : null,
+      paypalEnabled,
+      ncpEnabled,
       currencies,
     });
   } catch (err) {
@@ -192,6 +247,9 @@ app.get('/api/pagos', checkAdmin, async (req, res) => {
 // ─── PayPal: crear orden ─────────────────────────────────────────────────────
 
 app.post('/api/paypal/create-order', async (req, res) => {
+  if (!paypalEnabled) {
+    return res.status(503).json({ error: 'PayPal no está configurado todavía' });
+  }
   try {
     const { amount, description } = req.body;
 
@@ -238,6 +296,9 @@ app.post('/api/paypal/create-order', async (req, res) => {
 // ─── PayPal: capturar orden ──────────────────────────────────────────────────
 
 app.post('/api/paypal/capture-order/:orderID', async (req, res) => {
+  if (!paypalEnabled) {
+    return res.status(503).json({ error: 'PayPal no está configurado todavía' });
+  }
   try {
     const { orderID } = req.params;
     const token = await getPayPalToken();
@@ -280,6 +341,115 @@ app.post('/api/paypal/capture-order/:orderID', async (req, res) => {
     });
   } catch (err) {
     console.error('Error en capture-order:', err.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ─── PayPal NCP: crear orden de checkout ─────────────────────────────────────
+// Los pay links se crean a mano en el dashboard de PayPal; aquí solo se elige
+// el link adecuado y se genera el código de referencia (ver ncp.js).
+
+app.post('/api/ncp/create-order', async (req, res) => {
+  if (!ncpEnabled) {
+    return res.status(503).json({ error: 'El pago con PayPal estará disponible próximamente' });
+  }
+  try {
+    const { amount, description } = req.body;
+
+    if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+      return res.status(400).json({ error: 'Monto inválido' });
+    }
+    const monto = Math.round(parseFloat(amount) * 100) / 100;
+
+    const checkout = await ncp.createNcpCheckout(
+      { monto, moneda: 'USD', concepto: description || 'Pago' },
+      {
+        links: ncpLinks,
+        isReferenceTaken: ncpStore.isReferenceTaken,
+        saveOrder: ncpStore.saveOrder,
+        ttlMinutes: NCP_TTL_MINUTES,
+      }
+    );
+
+    res.json(checkout);
+  } catch (err) {
+    if (err.code === 'NO_NCP_LINK') {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('Error en ncp/create-order:', err.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ─── PayPal NCP: estado de la orden (polling del frontend) ───────────────────
+
+app.get('/api/ncp/status/:reference', async (req, res) => {
+  try {
+    const reference = ncp.extractReferenceCode(req.params.reference);
+    if (!reference) {
+      return res.status(400).json({ error: 'Código de referencia inválido' });
+    }
+
+    let order = await ncpStore.findOrderByReference(reference);
+    if (!order) {
+      return res.status(404).json({ error: 'Orden no encontrada' });
+    }
+
+    order = await ncpStore.expireIfDue(order);
+
+    res.json({
+      status: order.estado,
+      referenceCode: reference,
+      txId: order.tx_id || null,
+      amount: order.monto != null ? parseFloat(order.monto) : null,
+      currency: order.moneda,
+      expiresAt: order.expira_en || null,
+    });
+  } catch (err) {
+    console.error('Error en ncp/status:', err.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ─── PayPal: webhook (PAYMENT.CAPTURE.COMPLETED) ─────────────────────────────
+// Verificación de firma OBLIGATORIA contra la API oficial de PayPal; nunca se
+// procesa un payload sin verificar. Idempotente por transaction_id.
+
+app.post('/api/paypal/webhook', async (req, res) => {
+  if (!paypalEnabled || !PAYPAL_WEBHOOK_ID) {
+    console.warn('Webhook PayPal recibido pero las credenciales/PAYPAL_WEBHOOK_ID no están configuradas');
+    return res.status(503).json({ error: 'Webhook PayPal no configurado' });
+  }
+  try {
+    const { verified, reason } = await ncp.verifyWebhookSignature({
+      headers: req.headers,
+      rawBody: req.rawBody,
+      webhookId: PAYPAL_WEBHOOK_ID,
+      getAccessToken: getPayPalToken,
+      paypalBase: PAYPAL_BASE,
+    });
+
+    if (!verified) {
+      console.warn('Webhook PayPal con firma inválida:', reason);
+      return res.status(401).json({ error: 'Firma inválida' });
+    }
+
+    if (req.body.event_type !== 'PAYMENT.CAPTURE.COMPLETED') {
+      return res.json({ received: true, ignored: req.body.event_type });
+    }
+
+    const result = await ncp.processPayment(ncp.normalizeCaptureEvent(req.body), ncpStore, {
+      windowMinutes: NCP_WINDOW_MINUTES,
+    });
+
+    console.log(
+      `Webhook PayPal procesado: ${result.action}` +
+        (result.orderId ? ` (orden ${result.orderId})` : '') +
+        (result.reason ? ` — ${result.reason}` : '')
+    );
+    res.json({ received: true, action: result.action });
+  } catch (err) {
+    console.error('Error en webhook PayPal:', err.message);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
@@ -453,9 +623,23 @@ app.post('/api/crypto/ipn', async (req, res) => {
   }
 });
 
+// ─── Expiración periódica de órdenes NCP pendientes ──────────────────────────
+
+if (ncpEnabled) {
+  setInterval(async () => {
+    try {
+      const n = await ncpStore.expireOldOrders();
+      if (n > 0) console.log(`⏱ ${n} orden(es) NCP expiradas`);
+    } catch (err) {
+      console.error('Error expirando órdenes NCP:', err.message);
+    }
+  }, 5 * 60 * 1000).unref();
+}
+
 // ─── Inicio ──────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`✅ Servidor corriendo en http://localhost:${PORT}`);
-  console.log(`   Modo PayPal: ${PAYPAL_MODE || 'sandbox'}`);
+  console.log(`   Modo PayPal: ${PAYPAL_ENVIRONMENT} (${paypalEnabled ? 'credenciales OK' : 'deshabilitado'})`);
+  console.log(`   PayPal NCP: ${ncpEnabled ? `${ncpLinks.filter((l) => l.activo).length} link(s) activo(s)` : 'inactivo — Próximamente'}`);
 });

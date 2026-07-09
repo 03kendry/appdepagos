@@ -1,0 +1,26 @@
+{
+  "transaction_details": [
+    {
+      "transaction_info": {
+        "paypal_account_id": "F3DHXPYVQNBJW",
+        "transaction_id": "8MC585209K746392H",
+        "transaction_event_code": "T0006",
+        "transaction_initiation_date": "2026-07-08T14:40:00+0000",
+        "transaction_updated_date": "2026-07-08T14:40:00+0000",
+        "transaction_amount": { "currency_code": "USD", "value": "12.00" },
+        "fee_amount": { "currency_code": "USD", "value": "-0.77" },
+        "transaction_status": "S",
+        "transaction_note": "NXP-B8G4M3",
+        "invoice_id": ""
+      },
+      "payer_info": {
+        "account_id": "QYR5Z8XDSN5HA",
+        "email_address": "cliente@example.com",
+        "payer_name": { "given_name": "Cliente", "surname": "Prueba" }
+      }
+    }
+  ],
+  "total_items": 1,
+  "total_pages": 1,
+  "page": 1
+}

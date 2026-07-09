@@ -3,10 +3,12 @@
    ───────────────────────────────────────────── */
 
 let state = {
-  method: 'card',           // 'card' | 'crypto'
-  config: null,             // { paypalClientId, currencies }
+  method: 'card',           // 'card' | 'ncp' | 'crypto'
+  config: null,             // { paypalClientId, paypalEnabled, ncpEnabled, currencies }
   pollInterval: null,       // setInterval para estado cripto
+  ncpPollInterval: null,    // setInterval para estado NCP
   currentPayment: null,     // { paymentId, payAddress, payAmount, payCurrency }
+  currentNcpOrder: null,    // { referenceCode, url, amount, currency, linkType }
 };
 
 // ── Elementos del DOM ──────────────────────────────────────────────────────
@@ -22,12 +24,25 @@ const descInput      = $('description');
 const formError      = $('form-error');
 
 const methodCard     = $('method-card');
+const methodNcp      = $('method-ncp');
 const methodCrypto   = $('method-crypto');
 const cryptoField    = $('crypto-field');
 const cryptoSelect   = $('crypto-select');
 
 const paypalContainer = $('paypal-buttons-container');
 const btnCryptoPay   = $('btn-crypto-pay');
+const btnNcpPay      = $('btn-ncp-pay');
+
+const ncpView        = $('ncp-view');
+const refCodeEl      = $('ref-code');
+const ncpAmountEl    = $('ncp-amount');
+const ncpOpenWarning = $('ncp-open-amount-warning');
+const btnOpenPaypal  = $('btn-open-paypal');
+const ncpStatusDot   = $('ncp-status-dot');
+const ncpStatusText  = $('ncp-status-text');
+const ncpReviewMsg   = $('ncp-review-msg');
+const ncpExpiredMsg  = $('ncp-expired-msg');
+const btnNcpRetry    = $('btn-ncp-retry');
 
 const tCurrency      = $('t-currency');
 const tAmount        = $('t-amount');
@@ -90,10 +105,38 @@ async function loadConfig() {
     if (!res.ok) throw new Error('No se pudo cargar la configuración');
     state.config = await res.json();
     populateCryptoSelect(state.config.currencies);
-    loadPayPalSDK(state.config.paypalClientId);
+    applyMethodAvailability();
+    if (state.config.paypalEnabled) loadPayPalSDK(state.config.paypalClientId);
   } catch (err) {
     showError('Error al cargar la configuración. Recarga la página.');
     console.error(err);
+  }
+}
+
+// ── Disponibilidad de métodos ("Próximamente" si falta configuración) ────────
+
+function setMethodDisabled(el, disabled) {
+  el.classList.toggle('disabled', disabled);
+  const sub = el.querySelector('.method-sub');
+  sub.textContent = disabled ? 'Próximamente' : sub.dataset.defaultSub;
+}
+
+function isMethodEnabled(method) {
+  if (!state.config) return true; // antes de cargar config, optimista; se corrige al cargar
+  if (method === 'card') return state.config.paypalEnabled;
+  if (method === 'ncp') return state.config.ncpEnabled;
+  return true;
+}
+
+function firstEnabledMethod() {
+  return ['card', 'ncp', 'crypto'].find(isMethodEnabled) || 'crypto';
+}
+
+function applyMethodAvailability() {
+  setMethodDisabled(methodCard, !isMethodEnabled('card'));
+  setMethodDisabled(methodNcp, !isMethodEnabled('ncp'));
+  if (!isMethodEnabled(state.method)) {
+    setMethod(firstEnabledMethod());
   }
 }
 
@@ -206,27 +249,34 @@ function updateAmountField() {
 }
 
 function setMethod(method) {
+  if (!isMethodEnabled(method)) return;
   state.method = method;
 
   methodCard.classList.toggle('active', method === 'card');
+  methodNcp.classList.toggle('active', method === 'ncp');
   methodCrypto.classList.toggle('active', method === 'crypto');
 
+  hide(cryptoField);
+  hide(btnCryptoPay);
+  hide(btnNcpPay);
+  paypalContainer.innerHTML = '';
+  hide(paypalContainer);
+
   if (method === 'card') {
-    hide(cryptoField);
-    hide(btnCryptoPay);
     show(paypalContainer);
     if (window.paypal) renderPayPalButtons();
+  } else if (method === 'ncp') {
+    show(btnNcpPay);
   } else {
     show(cryptoField);
     show(btnCryptoPay);
-    paypalContainer.innerHTML = '';
-    hide(paypalContainer);
   }
   updateAmountField();
   clearError();
 }
 
 methodCard.addEventListener('click', () => setMethod('card'));
+methodNcp.addEventListener('click', () => setMethod('ncp'));
 methodCrypto.addEventListener('click', () => setMethod('crypto'));
 cryptoSelect.addEventListener('change', updateAmountField);
 
@@ -410,12 +460,152 @@ btnRetry.addEventListener('click', () => {
   clearError();
 });
 
+// ── Flujo PayPal NCP ───────────────────────────────────────────────────────
+
+btnNcpPay.addEventListener('click', async () => {
+  clearError();
+  if (!validateAmount()) return;
+
+  btnNcpPay.disabled = true;
+  btnNcpPay.textContent = 'Creando orden…';
+
+  try {
+    const res = await fetch('/api/ncp/create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: getAmount().toFixed(2),
+        description: descInput.value.trim() || 'Pago',
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      showError(err.error || 'Error al crear la orden');
+      return;
+    }
+
+    const order = await res.json();
+    state.currentNcpOrder = order;
+
+    showNcpView(order);
+    startNcpPolling(order.referenceCode);
+  } catch (err) {
+    showError('Error de red. Intenta de nuevo.');
+    console.error(err);
+  } finally {
+    btnNcpPay.disabled = false;
+    btnNcpPay.textContent = 'Continuar con PayPal →';
+  }
+});
+
+function showNcpView(order) {
+  hide(mainView);
+  show(ncpView);
+  hide(btnNcpRetry);
+  hide(ncpReviewMsg);
+  hide(ncpExpiredMsg);
+
+  refCodeEl.textContent = order.referenceCode;
+  ncpAmountEl.textContent = `$${order.amount.toFixed(2)} ${order.currency}`;
+  btnOpenPaypal.href = order.url;
+
+  if (order.openAmountWarning) {
+    ncpOpenWarning.textContent = `⚠ ${order.openAmountWarning}`;
+    show(ncpOpenWarning);
+  } else {
+    hide(ncpOpenWarning);
+  }
+
+  setNcpStatus('waiting');
+}
+
+$('copy-ref').addEventListener('click', () => {
+  if (!state.currentNcpOrder) return;
+  copyText(state.currentNcpOrder.referenceCode, 'copy-ref', 'Código copiado');
+});
+
+const NCP_STATUS_LABELS = {
+  waiting:        'Esperando confirmación del pago…',
+  pending_review: 'Pago recibido — en revisión manual',
+  finished:       '¡Pago confirmado!',
+  expired:        'La orden expiró',
+};
+
+function setNcpStatus(status) {
+  ncpStatusDot.className = 'status-dot';
+  if (status === 'waiting') {
+    ncpStatusDot.classList.add('waiting');
+  } else if (status === 'pending_review') {
+    ncpStatusDot.classList.add('confirming');
+  } else if (status === 'finished') {
+    ncpStatusDot.classList.add('finished');
+  } else {
+    ncpStatusDot.classList.add('failed');
+  }
+  ncpStatusText.textContent = NCP_STATUS_LABELS[status] || status;
+}
+
+function startNcpPolling(referenceCode) {
+  stopNcpPolling();
+
+  state.ncpPollInterval = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/ncp/status/${referenceCode}`);
+      if (!res.ok) return;
+
+      const data = await res.json();
+      setNcpStatus(data.status);
+
+      if (data.status === 'pending_review') {
+        show(ncpReviewMsg);
+      }
+
+      if (data.status === 'finished') {
+        stopNcpPolling();
+        setTimeout(() => {
+          showSuccess({
+            id: data.txId || referenceCode,
+            amount: `$${parseFloat(data.amount).toFixed(2)} ${data.currency}`,
+            method: 'PayPal — Link de pago',
+            concepto: descInput.value.trim() || '—',
+          });
+        }, 1200);
+      }
+
+      if (data.status === 'expired') {
+        stopNcpPolling();
+        show(ncpExpiredMsg);
+        show(btnNcpRetry);
+      }
+    } catch (err) {
+      console.error('Error en polling NCP:', err);
+    }
+  }, 10000);
+}
+
+function stopNcpPolling() {
+  if (state.ncpPollInterval) {
+    clearInterval(state.ncpPollInterval);
+    state.ncpPollInterval = null;
+  }
+}
+
+btnNcpRetry.addEventListener('click', () => {
+  hide(ncpView);
+  show(mainView);
+  stopNcpPolling();
+  clearError();
+});
+
 // ── Pantalla de éxito ──────────────────────────────────────────────────────
 
 function showSuccess({ id, amount, method, concepto }) {
   stopPolling();
+  stopNcpPolling();
   hide(mainView);
   hide(cryptoView);
+  hide(ncpView);
   show(successView);
 
   receipt.innerHTML = `
@@ -441,10 +631,12 @@ function showSuccess({ id, amount, method, concepto }) {
 btnNewPayment.addEventListener('click', () => {
   hide(successView);
   hide(cryptoView);
+  hide(ncpView);
+  stopNcpPolling();
   amountInput.value = '';
   descInput.value = '';
   clearError();
-  setMethod('card');
+  setMethod(firstEnabledMethod());
   show(mainView);
 });
 
